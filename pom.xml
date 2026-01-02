@@ -13,5 +13,12 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
+    <repositories>
+        <repository>
+            <id>langchain4j</id>
+            <url>https://repo.langchain4j.dev/releases</url>
+        </repository>
+    </repositories>
+
 
 </project>
