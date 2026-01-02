@@ -2,6 +2,7 @@ package net.youssfi.transactionservice.web;
 
 import net.youssfi.transactionservice.entities.Transaction;
 import net.youssfi.transactionservice.repository.TransactionRepository;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -18,7 +19,13 @@ public class TransactionController {
     }
 
     @GetMapping("/transactions")
-    public List<Transaction> transactions(){
-        return transactionRepository.findAll();
+    public ResponseEntity<List<Transaction>> transactions(){
+        try {
+            List<Transaction> transactions = transactionRepository.findAll();
+            return ResponseEntity.ok(transactions);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().build();
+        }
     }
 }

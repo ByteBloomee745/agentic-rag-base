@@ -4,8 +4,6 @@ import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
-import dev.langchain4j.service.AiServices;
-import net.youssfi.transactionservice.agents.TransactionAIAgent;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -35,13 +33,7 @@ public class OllamaConfig {
                 .build();
     }
 
-    @Bean
-    public TransactionAIAgent transactionAIAgent(
-            ChatLanguageModel chatLanguageModel,
-            StreamingChatLanguageModel streamingChatLanguageModel) {
-        return AiServices.builder(TransactionAIAgent.class)
-                .chatLanguageModel(chatLanguageModel)
-                .streamingChatLanguageModel(streamingChatLanguageModel)
-                .build();
-    }
+    // Bean TransactionAIAgent supprimé car les outils ne sont pas supportés par Ollama
+    // On utilise maintenant TransactionToolService pour appeler les outils manuellement
+    // et passer les résultats au LLM dans le contexte
 }
