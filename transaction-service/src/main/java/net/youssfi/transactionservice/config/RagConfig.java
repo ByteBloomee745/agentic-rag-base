@@ -3,6 +3,7 @@ package net.youssfi.transactionservice.config;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
+import dev.langchain4j.data.document.parser.apache.pdfbox.ApachePdfBoxDocumentParser;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -12,6 +13,7 @@ import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
 import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.data.message.TextContent;
@@ -28,6 +30,7 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -145,6 +148,7 @@ public class RagConfig {
 
     /**
      * Store d'embeddings utilisant PostgreSQL avec pgvector
+     * Fallback vers InMemoryEmbeddingStore si PostgreSQL n'est pas disponible
      * Ce bean n'est créé que si un EmbeddingModel est disponible
      */
     @Bean
@@ -164,19 +168,36 @@ public class RagConfig {
                 dimension = 384; // Dimension par défaut pour la plupart des modèles d'embedding
             }
             
-            return PgVectorEmbeddingStore.builder()
-                    .host(postgresHost)
-                    .port(postgresPort)
-                    .database(postgresDatabase)
-                    .user(postgresUser)
-                    .password(postgresPassword)
-                    .table(postgresTable)
-                    .dimension(dimension)
-                    .dropTableFirst(false) // Ne pas supprimer la table à chaque démarrage
-                    .build();
+            try {
+                EmbeddingStore<TextSegment> pgStore = PgVectorEmbeddingStore.builder()
+                        .host(postgresHost)
+                        .port(postgresPort)
+                        .database(postgresDatabase)
+                        .user(postgresUser)
+                        .password(postgresPassword)
+                        .table(postgresTable)
+                        .dimension(dimension)
+                        .dropTableFirst(false) // Ne pas supprimer la table à chaque démarrage
+                        .build();
+                
+                log.info("✅ EmbeddingStore PostgreSQL créé avec succès");
+                return pgStore;
+            } catch (Exception e) {
+                log.warn("⚠️ Impossible de se connecter à PostgreSQL: {}", e.getMessage());
+                log.warn("   Utilisation d'InMemoryEmbeddingStore en fallback (données perdues au redémarrage)");
+                log.warn("   Pour utiliser PostgreSQL, assurez-vous que:");
+                log.warn("   1. PostgreSQL est démarré sur {}:{}", postgresHost, postgresPort);
+                log.warn("   2. La base de données '{}' existe", postgresDatabase);
+                log.warn("   3. L'utilisateur '{}' a les permissions nécessaires", postgresUser);
+                log.warn("   4. L'extension pgvector est installée: CREATE EXTENSION IF NOT EXISTS vector;");
+                
+                // Fallback vers InMemoryEmbeddingStore
+                return new InMemoryEmbeddingStore<>();
+            }
         } catch (Exception e) {
-            log.error("Erreur lors de la création de l'EmbeddingStore: {}", e.getMessage(), e);
-            return null;
+            log.error("❌ Erreur critique lors de la création de l'EmbeddingStore: {}", e.getMessage(), e);
+            log.warn("   Utilisation d'InMemoryEmbeddingStore en fallback");
+            return new InMemoryEmbeddingStore<>();
         }
     }
 
@@ -237,6 +258,14 @@ public class RagConfig {
                 
                 log.info("✅ Dossier docs/ trouvé: {}", docsFolder.getAbsolutePath());
 
+                // Vérifier que l'embeddingStore n'est pas null
+                if (embeddingStore == null) {
+                    log.error("❌ ERREUR CRITIQUE: embeddingStore est null!");
+                    log.error("   Le RAG ne peut pas fonctionner sans EmbeddingStore.");
+                    log.error("   Vérifiez la configuration PostgreSQL ou utilisez InMemoryEmbeddingStore.");
+                    return;
+                }
+                
                 DocumentSplitter documentSplitter = DocumentSplitters.recursive(chunkSize, chunkOverlap, tokenizer);
                 
                 EmbeddingStoreIngestor ingestor = EmbeddingStoreIngestor.builder()
@@ -332,8 +361,14 @@ public class RagConfig {
                 return 0;
             }
             
-            // Utiliser le FileSystemDocumentLoader de LangChain4j qui gère les PDFs automatiquement
-            List<Document> documents = FileSystemDocumentLoader.loadDocuments(pdfFile.toPath());
+            // Utiliser ApachePdfBoxDocumentParser pour charger un fichier PDF unique
+            ApachePdfBoxDocumentParser pdfParser = new ApachePdfBoxDocumentParser();
+            Document document;
+            try (FileInputStream inputStream = new FileInputStream(pdfFile)) {
+                document = pdfParser.parse(inputStream);
+            }
+            List<Document> documents = new ArrayList<>();
+            documents.add(document);
             log.info("   📄 PDF parsé: {} document(s) extrait(s)", documents.size());
             
             if (documents.isEmpty()) {

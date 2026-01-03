@@ -44,7 +44,7 @@ public class AIAssistantController {
     @Autowired(required = false)
     private EmbeddingModel embeddingModel; // Embedding Model pour RAG
     
-    @Value("${rag.retriever.max-results:15}")
+    @Value("${rag.retriever.max-results:30}")
     private int maxResults;
     
     @Value("${rag.retriever.min-score:0.0}")
@@ -136,99 +136,250 @@ public class AIAssistantController {
      */
     private String retrieveRAGContext(String question) {
         try {
-            log.info("🔍 RAG: Recherche de contenu pour: '{}'", question);
+            log.info("═══════════════════════════════════════════════════════════");
+            log.info("🔍 RAG: Début de la recherche de contenu");
+            log.info("   Question: '{}'", question);
+            log.info("   maxResults: {}, minScore: {}", maxResults, minScore);
+            
+            // Vérifier que l'embeddingStore est disponible
+            if (embeddingStore == null) {
+                log.error("❌ embeddingStore est null!");
+                return "";
+            }
+            
+            // Vérifier que l'embeddingModel est disponible
+            if (embeddingModel == null) {
+                log.error("❌ embeddingModel est null!");
+                return "";
+            }
             
             // Générer l'embedding de la question
+            log.info("   Génération de l'embedding de la question...");
             dev.langchain4j.data.embedding.Embedding queryEmbedding = embeddingModel.embed(question).content();
-            log.debug("Embedding généré (dimension: {})", queryEmbedding.dimension());
+            log.info("   ✅ Embedding généré (dimension: {})", queryEmbedding.dimension());
             
             // Obtenir la méthode de recherche
+            log.info("   Recherche de la méthode findRelevant...");
             java.lang.reflect.Method findRelevantMethod = embeddingStore.getClass()
                     .getMethod("findRelevant", 
                             dev.langchain4j.data.embedding.Embedding.class, 
                             int.class, 
                             double.class);
+            log.info("   ✅ Méthode findRelevant trouvée");
             
             // Recherche progressive avec seuils décroissants
+            log.info("   Début de la recherche dans le vector store...");
             List<?> relevantMatches = searchInVectorStore(findRelevantMethod, queryEmbedding, question);
             
             if (relevantMatches == null || relevantMatches.isEmpty()) {
                 log.warn("⚠️ Aucun contenu trouvé dans le vector store pour: '{}'", question);
+                log.warn("   Vérifiez que:");
+                log.warn("   1. Les documents sont bien chargés dans le vector store");
+                log.warn("   2. Le vector store PostgreSQL est accessible");
+                log.warn("   3. Les embeddings ont été générés correctement");
                 return "";
             }
             
             log.info("✅ RAG: {} résultats trouvés", relevantMatches.size());
-            return buildRAGContext(relevantMatches);
+            String ragContext = buildRAGContext(relevantMatches);
+            log.info("✅ RAG: Contexte construit ({} caractères)", ragContext.length());
+            log.info("═══════════════════════════════════════════════════════════");
+            return ragContext;
             
         } catch (Exception e) {
             log.error("❌ Erreur lors de la récupération RAG: {}", e.getMessage(), e);
+            log.error("   Stack trace:", e);
             return "";
         }
     }
     
     /**
      * Recherche dans le vector store avec seuils progressifs
+     * Recherche très agressive pour trouver du contenu même avec faible similarité
      */
     private List<?> searchInVectorStore(java.lang.reflect.Method findRelevantMethod,
                                        dev.langchain4j.data.embedding.Embedding queryEmbedding,
                                        String question) throws Exception {
-        double[] scoreThresholds = {0.5, 0.3, 0.2, 0.1, 0.05, 0.0};
-        int searchMaxResults = Math.max(maxResults, 20);
+        // Commencer directement avec un seuil très bas pour être sûr de trouver quelque chose
+        double[] scoreThresholds = {0.0, 0.1, 0.2, 0.3, 0.5};
+        int searchMaxResults = Math.max(maxResults, 30); // Augmenter le nombre de résultats
         
-        // Recherche principale avec seuils progressifs
+        // Recherche principale avec seuils progressifs (commencer par 0.0)
         for (double threshold : scoreThresholds) {
             @SuppressWarnings("unchecked")
             List<?> matches = (List<?>) findRelevantMethod.invoke(
                     embeddingStore, queryEmbedding, searchMaxResults, threshold);
             
             if (matches != null && !matches.isEmpty()) {
-                log.debug("{} résultats trouvés avec minScore={}", matches.size(), threshold);
+                log.info("✅ {} résultats trouvés avec minScore={}", matches.size(), threshold);
                 return matches;
             }
         }
         
-        // Recherche large si aucun résultat
-        if (searchMaxResults < 50) {
-            @SuppressWarnings("unchecked")
-            List<?> allMatches = (List<?>) findRelevantMethod.invoke(
-                    embeddingStore, queryEmbedding, 50, 0.0);
-            
-            if (allMatches != null && !allMatches.isEmpty()) {
-                log.debug("{} résultats trouvés avec recherche large", allMatches.size());
-                return allMatches;
-            }
+        // Recherche très large si aucun résultat
+        log.warn("⚠️ Aucun résultat avec seuils normaux, tentative recherche très large...");
+        @SuppressWarnings("unchecked")
+        List<?> allMatches = (List<?>) findRelevantMethod.invoke(
+                embeddingStore, queryEmbedding, 100, 0.0); // Chercher jusqu'à 100 résultats
+        
+        if (allMatches != null && !allMatches.isEmpty()) {
+            log.info("✅ {} résultats trouvés avec recherche très large (minScore=0.0, maxResults=100)", 
+                    allMatches.size());
+            return allMatches;
         }
         
         // Dernière tentative: recherche par mots-clés
-        return searchByKeywords(findRelevantMethod, question);
+        log.warn("⚠️ Aucun résultat avec recherche large, tentative par mots-clés...");
+        List<?> keywordResults = searchByKeywords(findRelevantMethod, question);
+        if (keywordResults != null && !keywordResults.isEmpty()) {
+            return keywordResults;
+        }
+        
+        // Dernière tentative absolue: récupérer TOUS les documents disponibles
+        log.warn("⚠️ Aucun résultat avec recherche par mots-clés, tentative récupération de TOUS les documents...");
+        return getAllDocumentsFromStore(findRelevantMethod, queryEmbedding);
+    }
+    
+    /**
+     * Récupère TOUS les documents du store (fallback ultime)
+     */
+    private List<?> getAllDocumentsFromStore(java.lang.reflect.Method findRelevantMethod,
+                                             dev.langchain4j.data.embedding.Embedding queryEmbedding) {
+        try {
+            // Essayer plusieurs stratégies pour récupérer tous les documents
+            
+            // Stratégie 1: Score très négatif pour tout récupérer
+            @SuppressWarnings("unchecked")
+            List<?> allDocs = (List<?>) findRelevantMethod.invoke(
+                    embeddingStore, queryEmbedding, 1000, -10.0);
+            
+            if (allDocs != null && !allDocs.isEmpty()) {
+                log.info("✅ {} documents récupérés en mode fallback (score=-10.0)", allDocs.size());
+                return allDocs;
+            }
+            
+            // Stratégie 2: Embedding générique "document"
+            try {
+                dev.langchain4j.data.embedding.Embedding genericEmbedding = embeddingModel.embed("document").content();
+                @SuppressWarnings("unchecked")
+                List<?> genericResults = (List<?>) findRelevantMethod.invoke(
+                        embeddingStore, genericEmbedding, 1000, -10.0);
+                
+                if (genericResults != null && !genericResults.isEmpty()) {
+                    log.info("✅ {} documents récupérés avec embedding 'document'", genericResults.size());
+                    return genericResults;
+                }
+            } catch (Exception e) {
+                log.debug("Erreur avec embedding 'document': {}", e.getMessage());
+            }
+            
+            // Stratégie 3: Embedding "texte" ou "contenu"
+            String[] fallbackTerms = {"texte", "contenu", "information", "données", "analyse"};
+            for (String term : fallbackTerms) {
+                try {
+                    dev.langchain4j.data.embedding.Embedding termEmbedding = embeddingModel.embed(term).content();
+                    @SuppressWarnings("unchecked")
+                    List<?> termResults = (List<?>) findRelevantMethod.invoke(
+                            embeddingStore, termEmbedding, 1000, -10.0);
+                    
+                    if (termResults != null && !termResults.isEmpty()) {
+                        log.info("✅ {} documents récupérés avec embedding '{}'", termResults.size(), term);
+                        return termResults;
+                    }
+                } catch (Exception e) {
+                    log.debug("Erreur avec embedding '{}': {}", term, e.getMessage());
+                }
+            }
+            
+            // Stratégie 4: Essayer avec un embedding vide ou minimal
+            try {
+                dev.langchain4j.data.embedding.Embedding emptyEmbedding = embeddingModel.embed("a").content();
+                @SuppressWarnings("unchecked")
+                List<?> emptyResults = (List<?>) findRelevantMethod.invoke(
+                        embeddingStore, emptyEmbedding, 1000, -10.0);
+                
+                if (emptyResults != null && !emptyResults.isEmpty()) {
+                    log.info("✅ {} documents récupérés avec embedding minimal", emptyResults.size());
+                    return emptyResults;
+                }
+            } catch (Exception e) {
+                log.debug("Erreur avec embedding minimal: {}", e.getMessage());
+            }
+            
+        } catch (Exception e) {
+            log.warn("Erreur lors de la récupération de tous les documents: {}", e.getMessage());
+        }
+        return null;
     }
     
     /**
      * Recherche par mots-clés extraits de la question
+     * Recherche très agressive avec plusieurs stratégies
      */
     private List<?> searchByKeywords(java.lang.reflect.Method findRelevantMethod, String question) {
         try {
+            // Extraire les mots-clés importants
             String[] keywords = question.toLowerCase().split("\\s+");
+            List<String> importantKeywords = new ArrayList<>();
+            
             for (String keyword : keywords) {
-                if (keyword.length() > 3) {
-                    try {
-                        dev.langchain4j.data.embedding.Embedding keywordEmbedding = 
-                                embeddingModel.embed(keyword).content();
-                        @SuppressWarnings("unchecked")
-                        List<?> matches = (List<?>) findRelevantMethod.invoke(
-                                embeddingStore, keywordEmbedding, 10, 0.0);
-                        
-                        if (matches != null && !matches.isEmpty()) {
-                            log.debug("{} résultats trouvés avec le mot-clé '{}'", matches.size(), keyword);
-                            return matches;
-                        }
-                    } catch (Exception e) {
-                        log.debug("Erreur avec le mot-clé '{}': {}", keyword, e.getMessage());
+                // Filtrer les mots trop courts et les mots vides
+                if (keyword.length() > 3 && !keyword.matches("^(le|la|les|un|une|de|du|des|et|ou|est|sont|dans|pour|avec)$")) {
+                    importantKeywords.add(keyword);
+                }
+            }
+            
+            // Essayer chaque mot-clé important
+            for (String keyword : importantKeywords) {
+                try {
+                    dev.langchain4j.data.embedding.Embedding keywordEmbedding = 
+                            embeddingModel.embed(keyword).content();
+                    @SuppressWarnings("unchecked")
+                    List<?> matches = (List<?>) findRelevantMethod.invoke(
+                            embeddingStore, keywordEmbedding, 20, 0.0); // Augmenter à 20 résultats
+                    
+                    if (matches != null && !matches.isEmpty()) {
+                        log.info("✅ {} résultats trouvés avec le mot-clé '{}'", matches.size(), keyword);
+                        return matches;
                     }
+                } catch (Exception e) {
+                    log.debug("Erreur avec le mot-clé '{}': {}", keyword, e.getMessage());
+                }
+            }
+            
+            // Si aucun résultat, essayer des termes génériques liés à la question
+            String[] genericTerms = {"document", "contenu", "texte", "information", "données", "analyse", 
+                                     "analyse de données", "cours", "résumé", "introduction", "méthode", 
+                                     "technique", "statistique", "apprentissage", "machine learning"};
+            
+            // Ajouter des termes spécifiques basés sur la question
+            String questionLower = question.toLowerCase();
+            if (questionLower.contains("analyse") || questionLower.contains("données")) {
+                genericTerms = new String[]{"analyse de données", "analyse", "données", "statistique", 
+                                           "méthode", "technique", "cours", "résumé", "introduction"};
+            } else if (questionLower.contains("cours") || questionLower.contains("résumé")) {
+                genericTerms = new String[]{"cours", "résumé", "introduction", "document", "contenu", 
+                                           "texte", "information", "analyse"};
+            }
+            
+            for (String term : genericTerms) {
+                try {
+                    dev.langchain4j.data.embedding.Embedding termEmbedding = 
+                            embeddingModel.embed(term).content();
+                    @SuppressWarnings("unchecked")
+                    List<?> matches = (List<?>) findRelevantMethod.invoke(
+                            embeddingStore, termEmbedding, 50, 0.0); // Augmenter à 50 résultats
+                    
+                    if (matches != null && !matches.isEmpty()) {
+                        log.info("✅ {} résultats trouvés avec le terme générique '{}'", matches.size(), term);
+                        return matches;
+                    }
+                } catch (Exception e) {
+                    log.debug("Erreur avec le terme générique '{}': {}", term, e.getMessage());
                 }
             }
         } catch (Exception e) {
-            log.debug("Erreur lors de la recherche par mots-clés: {}", e.getMessage());
+            log.warn("Erreur lors de la recherche par mots-clés: {}", e.getMessage());
         }
         return null;
     }
@@ -241,25 +392,36 @@ public class AIAssistantController {
         ragBuilder.append("═══════════════════════════════════════════════════════════\n");
         ragBuilder.append("📚 CONTEXTE PERTINENT DEPUIS LES DOCUMENTS CHARGÉS\n");
         ragBuilder.append("═══════════════════════════════════════════════════════════\n\n");
-        ragBuilder.append("INSTRUCTIONS:\n");
-        ragBuilder.append("- Les informations ci-dessous proviennent UNIQUEMENT des documents chargés.\n");
-        ragBuilder.append("- Répondez EXCLUSIVEMENT en utilisant ces informations.\n");
-        ragBuilder.append("- Ne JAMAIS mentionner les outils de base de données ou les transactions.\n\n");
+        ragBuilder.append("⚠️ INSTRUCTIONS CRITIQUES:\n");
+        ragBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        ragBuilder.append("1. Les informations ci-dessous proviennent UNIQUEMENT des documents PDF/documents chargés.\n");
+        ragBuilder.append("2. Vous DEVEZ répondre EXCLUSIVEMENT en utilisant ces informations de documents.\n");
+        ragBuilder.append("3. INTERDICTION ABSOLUE: Ne JAMAIS mentionner:\n");
+        ragBuilder.append("   - Les outils de base de données (getAllTransactions, calculateAccountBalance, etc.)\n");
+        ragBuilder.append("   - Les transactions, comptes, soldes, ou toute information financière de la base de données\n");
+        ragBuilder.append("   - Les opérations de base de données ou SQL\n");
+        ragBuilder.append("4. Si l'information n'est pas dans les documents, dites-le clairement.\n");
+        ragBuilder.append("5. Ne pas inventer d'informations.\n");
+        ragBuilder.append("6. Citez directement le contenu des documents ci-dessous.\n\n");
+        ragBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
         ragBuilder.append("CONTENU DES DOCUMENTS:\n");
         ragBuilder.append("───────────────────────────────────────────────────────────\n\n");
         
         int segmentIndex = 1;
+        int totalChars = 0;
         for (Object match : relevantMatches) {
             try {
                 TextSegment segment = extractTextSegment(match);
                 if (segment != null && segment.text() != null && !segment.text().trim().isEmpty()) {
                     String segmentText = segment.text().trim();
-                    if (segmentText.length() > 3000) {
-                        segmentText = segmentText.substring(0, 3000) + "...";
+                    // Augmenter la limite pour avoir plus de contenu
+                    if (segmentText.length() > 5000) {
+                        segmentText = segmentText.substring(0, 5000) + "...";
                     }
                     
                     ragBuilder.append("【 Extrait ").append(segmentIndex).append(" 】\n");
                     ragBuilder.append(segmentText).append("\n\n");
+                    totalChars += segmentText.length();
                     segmentIndex++;
                 }
             } catch (Exception e) {
@@ -268,7 +430,7 @@ public class AIAssistantController {
         }
         
         ragBuilder.append("═══════════════════════════════════════════════════════════\n");
-        log.debug("RAG: {} segments ajoutés au contexte", segmentIndex - 1);
+        log.info("✅ RAG: {} segments ajoutés au contexte ({} caractères)", segmentIndex - 1, totalChars);
         return ragBuilder.toString();
     }
     
@@ -300,18 +462,30 @@ public class AIAssistantController {
      */
     private String buildSystemPrompt(QuestionType questionType, String ragContext, String toolResult) {
         if (questionType == QuestionType.DOCUMENT) {
-            String prompt = "You are a DOCUMENT ANALYSIS ASSISTANT. Answer questions ONLY about DOCUMENTS, PDFs, and CONTENT.\n\n" +
-                   "PROHIBITIONS:\n" +
-                   "- NEVER mention database tools, transactions, accounts, or balances\n" +
-                   "- NEVER say 'from the database' or 'using database tools'\n\n" +
-                   "INSTRUCTIONS:\n" +
-                   "- Answer ONLY using the document content in the 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' section\n" +
-                   "- If no document context is provided, say: 'This information is not available in the provided documents.'\n" +
-                   "- Focus on document content: analysis, methods, conclusions, etc.\n\n" +
-                   "Remember previous messages about documents.";
+            String prompt = "You are a DOCUMENT ANALYSIS ASSISTANT. Your ONLY purpose is to answer questions about DOCUMENTS, PDFs, and CONTENT.\n\n" +
+                   "🚫 ABSOLUTE PROHIBITIONS:\n" +
+                   "- NEVER mention database tools (getAllTransactions, calculateAccountBalance, etc.)\n" +
+                   "- NEVER mention transactions, accounts, balances, or any financial database information\n" +
+                   "- NEVER say 'from the database' or 'using database tools'\n" +
+                   "- NEVER talk about database operations or SQL queries\n\n" +
+                   "✅ CRITICAL INSTRUCTIONS:\n" +
+                   "- The user has asked a question about DOCUMENTS or CONTENT from loaded files.\n" +
+                   "- You MUST answer EXCLUSIVELY using the information provided in the 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' section below.\n" +
+                   "- Read the document content carefully and quote directly from it.\n" +
+                   "- If the document context contains the answer, use it directly.\n" +
+                   "- If no document context is provided or the information is not in the documents, say: 'I'm sorry, but this information is not available in the provided documents. Please ensure the documents are loaded in the system.'\n" +
+                   "- Focus ONLY on document content: analysis, methods, conclusions, data analysis techniques, research findings, etc.\n" +
+                   "- Do not invent or make up information.\n" +
+                   "- Cite specific parts of the documents when answering.\n\n" +
+                   "Remember: You are a DOCUMENT assistant, NOT a database assistant.";
             
             if (ragContext.isEmpty()) {
-                prompt += "\n\nWARNING: No document context found. Inform the user that the information is not available.";
+                prompt += "\n\n⚠️ WARNING: No document context was found in the 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' section. " +
+                         "You MUST inform the user that the information is not available in the loaded documents. " +
+                         "DO NOT use database tools or mention transactions.";
+            } else {
+                prompt += "\n\n✅ IMPORTANT: Document context IS PROVIDED in the 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' section. " +
+                         "You MUST use this context to answer the user's question. Read it carefully and base your answer on it.";
             }
             return prompt;
         } else {
@@ -334,11 +508,21 @@ public class AIAssistantController {
         
         if (isDocumentQuestion) {
             if (!ragContext.isEmpty()) {
+                // Le contexte RAG est déjà formaté avec toutes les instructions
                 messageBuilder.append(ragContext);
-                messageBuilder.append("\n\nQuestion de l'utilisateur: ").append(question);
+                messageBuilder.append("\n\n");
+                messageBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                messageBuilder.append("❓ QUESTION DE L'UTILISATEUR:\n");
+                messageBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                messageBuilder.append(question);
+                messageBuilder.append("\n\n");
+                messageBuilder.append("⚠️ RAPPEL: Répondez UNIQUEMENT en utilisant le contenu des documents fournis ci-dessus. ");
+                messageBuilder.append("Ne mentionnez JAMAIS la base de données ou les transactions.");
             } else {
-                messageBuilder.append("Aucun contenu trouvé dans les documents chargés.\n\n");
+                messageBuilder.append("⚠️ ATTENTION: Aucun contenu trouvé dans les documents chargés pour répondre à cette question.\n\n");
                 messageBuilder.append("Question: ").append(question);
+                messageBuilder.append("\n\n");
+                messageBuilder.append("Veuillez informer l'utilisateur que l'information demandée n'est pas disponible dans les documents chargés.");
             }
         } else {
             if (toolResult != null && !toolResult.isEmpty()) {

@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -31,6 +33,7 @@ public class OllamaEmbeddingModelImpl implements EmbeddingModel {
     private String embeddingModelName;
 
     private final HttpClient httpClient;
+    private final Gson gson;
 
     public String getEmbeddingModelName() {
         return embeddingModelName;
@@ -40,17 +43,17 @@ public class OllamaEmbeddingModelImpl implements EmbeddingModel {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
                 .build();
+        this.gson = new Gson();
     }
 
     @Override
     public Response<Embedding> embed(String text) {
         try {
-            // Appeler l'API Ollama pour générer l'embedding
-            String requestBody = String.format(
-                    "{\"model\": \"%s\", \"prompt\": \"%s\"}",
-                    embeddingModelName,
-                    text.replace("\"", "\\\"")
-            );
+            // Utiliser Gson pour créer le JSON correctement (gère automatiquement l'échappement)
+            JsonObject requestJson = new JsonObject();
+            requestJson.addProperty("model", embeddingModelName);
+            requestJson.addProperty("prompt", text);
+            String requestBody = gson.toJson(requestJson);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "/api/embeddings"))
@@ -141,14 +144,16 @@ public class OllamaEmbeddingModelImpl implements EmbeddingModel {
     /**
      * Crée un embedding de fallback simple basé sur le hash du texte
      * Ceci est utilisé si Ollama n'est pas disponible
+     * IMPORTANT: Utiliser 768 dimensions pour correspondre à nomic-embed-text
      */
     private Response<Embedding> createFallbackEmbedding(String text) {
-        // Embedding simple basé sur le hash du texte (384 dimensions)
-        float[] embedding = new float[384];
+        // Embedding simple basé sur le hash du texte (768 dimensions pour correspondre à nomic-embed-text)
+        float[] embedding = new float[768];
         int hash = text.hashCode();
-        for (int i = 0; i < 384; i++) {
+        for (int i = 0; i < 768; i++) {
             embedding[i] = (float) Math.sin(hash + i) * 0.1f;
         }
+        log.warn("⚠️ Utilisation d'un embedding de fallback (768 dimensions) - Ollama n'est pas disponible ou a échoué");
         return Response.from(Embedding.from(embedding));
     }
 }
