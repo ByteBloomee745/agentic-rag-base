@@ -12,6 +12,7 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import net.youssfi.transactionservice.agents.TransactionAIAgent;
 import net.youssfi.transactionservice.agents.TransactionAiTools;
+import net.youssfi.transactionservice.agents.MultiAgentOrchestrator;
 import net.youssfi.transactionservice.service.TransactionToolService;
 import net.youssfi.transactionservice.util.QuestionClassifier;
 import net.youssfi.transactionservice.util.QuestionClassifier.QuestionType;
@@ -37,6 +38,9 @@ public class AIAssistantController {
     private final TransactionToolService transactionToolService;
     private final TransactionAiTools transactionAiTools;
     private final QuestionClassifier questionClassifier;
+    
+    @Autowired(required = false)
+    private MultiAgentOrchestrator multiAgentOrchestrator; // Orchestrateur multi-agents (optionnel)
     
     @Autowired(required = false)
     private EmbeddingStore<TextSegment> embeddingStore; // RAG Embedding Store
@@ -462,41 +466,43 @@ public class AIAssistantController {
      */
     private String buildSystemPrompt(QuestionType questionType, String ragContext, String toolResult) {
         if (questionType == QuestionType.DOCUMENT) {
-            String prompt = "You are a DOCUMENT ANALYSIS ASSISTANT. Your ONLY purpose is to answer questions about DOCUMENTS, PDFs, and CONTENT.\n\n" +
-                   "🚫 ABSOLUTE PROHIBITIONS:\n" +
-                   "- NEVER mention database tools (getAllTransactions, calculateAccountBalance, etc.)\n" +
-                   "- NEVER mention transactions, accounts, balances, or any financial database information\n" +
-                   "- NEVER say 'from the database' or 'using database tools'\n" +
-                   "- NEVER talk about database operations or SQL queries\n\n" +
-                   "✅ CRITICAL INSTRUCTIONS:\n" +
-                   "- The user has asked a question about DOCUMENTS or CONTENT from loaded files.\n" +
-                   "- You MUST answer EXCLUSIVELY using the information provided in the 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' section below.\n" +
-                   "- Read the document content carefully and quote directly from it.\n" +
-                   "- If the document context contains the answer, use it directly.\n" +
-                   "- If no document context is provided or the information is not in the documents, say: 'I'm sorry, but this information is not available in the provided documents. Please ensure the documents are loaded in the system.'\n" +
-                   "- Focus ONLY on document content: analysis, methods, conclusions, data analysis techniques, research findings, etc.\n" +
-                   "- Do not invent or make up information.\n" +
-                   "- Cite specific parts of the documents when answering.\n\n" +
-                   "Remember: You are a DOCUMENT assistant, NOT a database assistant.";
+            String prompt = "Tu es un ASSISTANT D'ANALYSE DE DOCUMENTS. Ton SEUL objectif est de répondre aux questions sur les DOCUMENTS, PDFs et CONTENUS.\n\n" +
+                   "🚫 INTERDICTIONS ABSOLUES:\n" +
+                   "- Ne JAMAIS mentionner les outils de base de données (getAllTransactions, calculateAccountBalance, etc.)\n" +
+                   "- Ne JAMAIS mentionner les transactions, comptes, soldes ou toute information financière de la base de données\n" +
+                   "- Ne JAMAIS dire 'de la base de données' ou 'en utilisant les outils de base de données'\n" +
+                   "- Ne JAMAIS parler d'opérations de base de données ou de requêtes SQL\n\n" +
+                   "✅ INSTRUCTIONS CRITIQUES:\n" +
+                   "- L'utilisateur a posé une question sur les DOCUMENTS ou CONTENUS des fichiers chargés.\n" +
+                   "- Tu DOIS répondre EXCLUSIVEMENT en utilisant les informations fournies dans la section 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' ci-dessous.\n" +
+                   "- Lis attentivement le contenu des documents et cite directement.\n" +
+                   "- Si le contexte du document contient la réponse, utilise-le directement.\n" +
+                   "- Si aucun contexte de document n'est fourni ou si l'information n'est pas dans les documents, dis: 'Je suis désolé, mais cette information n'est pas disponible dans les documents fournis. Veuillez vous assurer que les documents sont chargés dans le système.'\n" +
+                   "- Concentre-toi UNIQUEMENT sur le contenu des documents: analyses, méthodes, conclusions, techniques d'analyse de données, résultats de recherche, etc.\n" +
+                   "- N'invente pas d'informations.\n" +
+                   "- Cite des parties spécifiques des documents lors de la réponse.\n\n" +
+                   "Rappel: Tu es un assistant de DOCUMENTS, PAS un assistant de base de données.\n\n" +
+                   "IMPORTANT: Réponds TOUJOURS en FRANÇAIS.";
             
             if (ragContext.isEmpty()) {
-                prompt += "\n\n⚠️ WARNING: No document context was found in the 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' section. " +
-                         "You MUST inform the user that the information is not available in the loaded documents. " +
-                         "DO NOT use database tools or mention transactions.";
+                prompt += "\n\n⚠️ ATTENTION: Aucun contexte de document n'a été trouvé dans la section 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS'. " +
+                         "Tu DOIS informer l'utilisateur que l'information n'est pas disponible dans les documents chargés. " +
+                         "N'utilise PAS les outils de base de données et ne mentionne PAS les transactions.";
             } else {
-                prompt += "\n\n✅ IMPORTANT: Document context IS PROVIDED in the 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS' section. " +
-                         "You MUST use this context to answer the user's question. Read it carefully and base your answer on it.";
+                prompt += "\n\n✅ IMPORTANT: Le contexte du document EST FOURNI dans la section 'CONTEXTE PERTINENT DEPUIS LES DOCUMENTS'. " +
+                         "Tu DOIS utiliser ce contexte pour répondre à la question de l'utilisateur. Lis-le attentivement et base ta réponse dessus.";
             }
             return prompt;
         } else {
-            return "You are a TRANSACTION MANAGEMENT ASSISTANT. Answer questions about TRANSACTIONS.\n\n" +
-                   "PROHIBITIONS:\n" +
-                   "- NEVER mention documents, PDFs, or document content\n\n" +
+            return "Tu es un ASSISTANT DE GESTION DE TRANSACTIONS. Réponds aux questions sur les TRANSACTIONS.\n\n" +
+                   "INTERDICTIONS:\n" +
+                   "- Ne JAMAIS mentionner les documents, PDFs ou le contenu des documents\n\n" +
                    "INSTRUCTIONS:\n" +
-                   "- Use ONLY the transaction data in the 'Données récupérées de la base de données' section\n" +
-                   "- Available tools: getAllTransactions, getAllTransactionsByAccountId, getTransactionsByStatus, " +
+                   "- Utilise UNIQUEMENT les données de transaction dans la section 'Données récupérées de la base de données'\n" +
+                   "- Outils disponibles: getAllTransactions, getAllTransactionsByAccountId, getTransactionsByStatus, " +
                    "getTransactionById, updateTransactionStatus, createTransaction, deleteTransaction, calculateAccountBalance\n\n" +
-                   "Provide accurate responses based on transaction data.";
+                   "Fournis des réponses précises basées sur les données de transaction.\n\n" +
+                   "IMPORTANT: Réponds TOUJOURS en FRANÇAIS.";
         }
     }
     
@@ -581,7 +587,7 @@ public class AIAssistantController {
     @GetMapping("/askAgentDirect")
     public Flux<String> chatDirect(@RequestParam(defaultValue = "Bonjour") String question) {
         SystemMessage systemMessage = SystemMessage.from(
-            "You are a helpful assistant. Answer the user's question using the provided context."
+            "Tu es un assistant utile. Réponds à la question de l'utilisateur en utilisant le contexte fourni. Réponds TOUJOURS en FRANÇAIS."
         );
         UserMessage userMessage = UserMessage.from(question);
         
@@ -633,6 +639,48 @@ public class AIAssistantController {
      * Endpoint de diagnostic pour vérifier l'état du RAG
      * Accessible via /ragStatus ou /rag/status
      */
+    /**
+     * Endpoint utilisant l'orchestration multi-agents (Agentic RAG 2.0)
+     * Pipeline: Classification → Retrieval → Reasoning → ReAct → Tool-Use → Verification → Réponse
+     */
+    @GetMapping("/askAgentMultiAgent")
+    public Flux<String> chatMultiAgent(
+            @RequestParam(defaultValue = "Bonjour") String question,
+            @RequestParam(required = false, defaultValue = "default") String chatId) {
+        
+        try {
+            // Décoder la question
+            String decodedQuestion = java.net.URLDecoder.decode(question, java.nio.charset.StandardCharsets.UTF_8);
+            if (!decodedQuestion.equals(question)) {
+                question = decodedQuestion;
+            }
+            
+            if (multiAgentOrchestrator == null) {
+                log.warn("⚠️ MultiAgentOrchestrator non disponible, utilisation du mode classique");
+                return chat(question, chatId);
+            }
+            
+            log.info("🎯 Utilisation de l'orchestration multi-agents pour: '{}'", question);
+            
+            // Orchestrer avec tous les agents
+            MultiAgentOrchestrator.OrchestrationResult result = multiAgentOrchestrator.orchestrate(question);
+            
+            // Sauvegarder dans la mémoire conversationnelle
+            MessageWindowChatMemory chatMemory = (MessageWindowChatMemory) chatMemoryProvider.get((Object) chatId);
+            chatMemory.add(UserMessage.from(question));
+            chatMemory.add(dev.langchain4j.data.message.AiMessage.from(result.getFinalResponse()));
+            
+            // Retourner la réponse en streaming (simulé)
+            return Flux.just(result.getFinalResponse().split(""))
+                    .map(s -> s)
+                    .delayElements(java.time.Duration.ofMillis(20)); // Simulation du streaming
+            
+        } catch (Exception e) {
+            log.error("Erreur lors de l'orchestration multi-agents: {}", e.getMessage(), e);
+            return Flux.just("Erreur: " + e.getMessage());
+        }
+    }
+    
     @GetMapping({"/ragStatus", "/rag/status"})
     public String ragStatus() {
         StringBuilder status = new StringBuilder();
