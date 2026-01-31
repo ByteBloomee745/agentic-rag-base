@@ -2,7 +2,7 @@ package net.youssfi.transactionservice.agents;
 
 import lombok.extern.slf4j.Slf4j;
 import net.youssfi.transactionservice.util.QuestionClassifier;
-import net.youssfi.transactionservice.util.QuestionClassifier.QuestionType;
+import net.youssfi.transactionservice.util.QuestionType;
 import org.springframework.stereotype.Component;
 
 /**
@@ -126,7 +126,7 @@ public class MultiAgentOrchestrator {
                 response,
                 structured.getStructuredContext()
             );
-            log.info("   ✅ Vérification terminée (score: {:.2f})", verification.getConfidenceScore());
+            log.info("   ✅ Vérification terminée (score: {})", String.format("%.2f", verification.getConfidenceScore()));
             
             String finalResponse = response;
             boolean wasCorrected = false;
@@ -139,7 +139,7 @@ public class MultiAgentOrchestrator {
             
             log.info("═══════════════════════════════════════════════════════════");
             log.info("✅ Orchestration terminée");
-            log.info("   Score de confiance: {:.2f}", verification.getConfidenceScore());
+            log.info("   Score de confiance: {}", String.format("%.2f", verification.getConfidenceScore()));
             log.info("   Correction appliquée: {}", wasCorrected);
             log.info("═══════════════════════════════════════════════════════════");
             

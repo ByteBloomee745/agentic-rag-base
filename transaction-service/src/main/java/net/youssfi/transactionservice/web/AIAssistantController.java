@@ -15,7 +15,7 @@ import net.youssfi.transactionservice.agents.TransactionAiTools;
 import net.youssfi.transactionservice.agents.MultiAgentOrchestrator;
 import net.youssfi.transactionservice.service.TransactionToolService;
 import net.youssfi.transactionservice.util.QuestionClassifier;
-import net.youssfi.transactionservice.util.QuestionClassifier.QuestionType;
+import net.youssfi.transactionservice.util.QuestionType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -496,13 +496,27 @@ public class AIAssistantController {
         } else {
             return "Tu es un ASSISTANT DE GESTION DE TRANSACTIONS. Réponds aux questions sur les TRANSACTIONS.\n\n" +
                    "INTERDICTIONS:\n" +
-                   "- Ne JAMAIS mentionner les documents, PDFs ou le contenu des documents\n\n" +
-                   "INSTRUCTIONS:\n" +
-                   "- Utilise UNIQUEMENT les données de transaction dans la section 'Données récupérées de la base de données'\n" +
-                   "- Outils disponibles: getAllTransactions, getAllTransactionsByAccountId, getTransactionsByStatus, " +
-                   "getTransactionById, updateTransactionStatus, createTransaction, deleteTransaction, calculateAccountBalance\n\n" +
-                   "Fournis des réponses précises basées sur les données de transaction.\n\n" +
-                   "IMPORTANT: Réponds TOUJOURS en FRANÇAIS.";
+                   "- Ne JAMAIS mentionner les documents, PDFs ou le contenu des documents\n" +
+                   "- Ne JAMAIS donner de code JavaScript, Python, ou autre langage de programmation\n" +
+                   "- Ne JAMAIS expliquer comment utiliser les méthodes ou fonctions\n" +
+                   "- Ne JAMAIS dire 'vous pouvez utiliser la méthode X' ou 'voici un exemple de code'\n\n" +
+                   "INSTRUCTIONS CRITIQUES:\n" +
+                   "- Les outils ont DÉJÀ été exécutés et les données sont dans la section 'Données récupérées de la base de données'\n" +
+                   "- Tu DOIS utiliser DIRECTEMENT ces données pour répondre à l'utilisateur\n" +
+                   "- Si les données contiennent les informations demandées, affiche-les directement\n" +
+                   "- Réponds comme si tu avais accès direct aux données, pas comme un développeur qui explique le code\n" +
+                   "- Formate ta réponse de manière naturelle et lisible pour l'utilisateur\n\n" +
+                   "EXEMPLE DE BONNE RÉPONSE:\n" +
+                   "Si les données contiennent: 'ID: 17 | Compte: 11 | Montant: 5000.00 | Type: CREDIT | Statut: PENDING'\n" +
+                   "Tu réponds: 'Voici les détails de la transaction 17 :\n" +
+                   "- ID : 17\n" +
+                   "- Compte : 11\n" +
+                   "- Montant : 5000.00 euros\n" +
+                   "- Type : CREDIT\n" +
+                   "- Statut : PENDING'\n\n" +
+                   "EXEMPLE DE MAUVAISE RÉPONSE (À ÉVITER):\n" +
+                   "'Vous pouvez utiliser getTransactionById(17)...' ou 'Voici un exemple de code...'\n\n" +
+                   "IMPORTANT: Réponds TOUJOURS en FRANÇAIS et utilise DIRECTEMENT les données fournies.";
         }
     }
     
@@ -532,9 +546,24 @@ public class AIAssistantController {
             }
         } else {
             if (toolResult != null && !toolResult.isEmpty()) {
-                messageBuilder.append("Données récupérées de la base de données:\n");
+                messageBuilder.append("═══════════════════════════════════════════════════════════\n");
+                messageBuilder.append("💾 DONNÉES RÉCUPÉRÉES DE LA BASE DE DONNÉES\n");
+                messageBuilder.append("═══════════════════════════════════════════════════════════\n");
+                messageBuilder.append("⚠️ INSTRUCTIONS CRITIQUES:\n");
+                messageBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                messageBuilder.append("Les outils ont DÉJÀ été exécutés. Les données ci-dessous sont RÉELLES et DISPONIBLES.\n");
+                messageBuilder.append("Tu DOIS utiliser ces données DIRECTEMENT pour répondre à l'utilisateur.\n");
+                messageBuilder.append("NE donne PAS de code, NE dis PAS 'vous pouvez utiliser...', utilise simplement les données.\n\n");
+                messageBuilder.append("DONNÉES:\n");
+                messageBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
                 messageBuilder.append(toolResult);
-                messageBuilder.append("\n\nQuestion de l'utilisateur: ").append(question);
+                messageBuilder.append("\n\n");
+                messageBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                messageBuilder.append("❓ QUESTION DE L'UTILISATEUR:\n");
+                messageBuilder.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                messageBuilder.append(question);
+                messageBuilder.append("\n\n");
+                messageBuilder.append("⚠️ RAPPEL: Utilise les données ci-dessus pour répondre DIRECTEMENT. Ne donne pas de code.");
             } else {
                 messageBuilder.append(question);
             }

@@ -76,12 +76,25 @@ public class TransactionToolService {
             }
         }
         
-        // Pattern pour détecter une transaction par ID
-        Pattern transactionIdPattern = Pattern.compile("(?:transaction|la transaction)\\s+(?:numéro|number|id)?\\s*(?:de|of)?\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
+        // Pattern pour détecter une transaction par ID (amélioré pour capturer "affiche", "montre", etc.)
+        Pattern transactionIdPattern = Pattern.compile("(?:affiche|afficher|montre|montrer|donne|donner|voir|voir|détails|details|information|infos)?\\s*(?:de|du|de la|sur)?\\s*(?:la|une)?\\s*(?:transaction)?\\s*(?:numéro|number|id|n°)?\\s*(?:de|of)?\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
         Matcher transactionIdMatcher = transactionIdPattern.matcher(question);
         if (transactionIdMatcher.find()) {
             try {
                 Long transactionId = Long.parseLong(transactionIdMatcher.group(1));
+                Transaction transaction = transactionAiTools.getTransactionById(transactionId);
+                return "Détails de la transaction:\n" + formatTransaction(transaction);
+            } catch (Exception e) {
+                return "Erreur: " + e.getMessage();
+            }
+        }
+        
+        // Pattern alternatif: "transaction 17" ou "transaction numéro 17"
+        Pattern transactionIdPattern2 = Pattern.compile("(?:transaction|la transaction)\\s+(?:numéro|number|id|n°)?\\s*(?:de|of)?\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
+        Matcher transactionIdMatcher2 = transactionIdPattern2.matcher(question);
+        if (transactionIdMatcher2.find()) {
+            try {
+                Long transactionId = Long.parseLong(transactionIdMatcher2.group(1));
                 Transaction transaction = transactionAiTools.getTransactionById(transactionId);
                 return "Détails de la transaction:\n" + formatTransaction(transaction);
             } catch (Exception e) {
